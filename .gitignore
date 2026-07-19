@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Project Data (Credentials & local db)
+data/
+
+# Build and Distribution
+build/
+dist/
+*.spec
+*.exe
+
+# IDEs and Tools
+.idea/
+.vscode/
+*.swp
+*.swo
+.claude/
+.zencoder/
+.zenflow/
