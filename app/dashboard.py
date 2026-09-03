@@ -3,11 +3,14 @@ import logging
 
 import praw
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QTabWidget,
-                             QStatusBar, QMessageBox)
+                             QStatusBar, QMessageBox, QSplitter)
+from PyQt5.QtCore import Qt
 
 from . import DATA_DIR
 from .post_log import PostLog
 from .favorites import FavoritesManager
+from .flair_store import FlairStore
+from .log_console import LogConsole
 from .tabs.config_tab import ConfigTab
 from .tabs.subreddits_tab import SubredditsTab
 from .tabs.search_tab import SearchTab
@@ -64,10 +67,13 @@ class RedditDashboard(QMainWindow):
         super().__init__()
         logger.info("=== Reddit Dashboard Starting ===")
 
-        self._post_log = PostLog(filepath=os.path.join(DATA_DIR, 'reddit_posts_log.xlsx'))
+        self._post_log = PostLog(filepath=os.path.join(DATA_DIR, 'reddit_posts_log.csv'))
         self._post_log.initialize()
         self._favorites = FavoritesManager(filepath=os.path.join(DATA_DIR, 'subreddit_favorites.json'))
         self._favorites.load()
+        self._flair_store = FlairStore(filepath=os.path.join(DATA_DIR, 'subreddit_flairs.csv'))
+        self._flair_store.initialize()
+        self._flair_store.load()
 
         self._reddit = None
         self._reddit_creds = None
@@ -76,7 +82,7 @@ class RedditDashboard(QMainWindow):
         logger.info("=== Reddit Dashboard Initialized ===")
 
     def _build_ui(self):
-        self.setWindowTitle('Reddit Dashboard - Excel Edition')
+        self.setWindowTitle('Reddit Dashboard')
         self.setGeometry(100, 100, 1400, 900)
         self.setStyleSheet(STYLESHEET)
 
@@ -85,14 +91,13 @@ class RedditDashboard(QMainWindow):
         layout = QVBoxLayout(central)
 
         self._tabs = QTabWidget()
-        layout.addWidget(self._tabs)
 
         config_file = os.path.join(DATA_DIR, 'reddit_config.json')
         self._config_tab     = ConfigTab(config_file=config_file)
         self._subreddits_tab = SubredditsTab(self._favorites, self._get_reddit)
         self._search_tab     = SearchTab(self._get_reddit)
-        self._import_tab     = ImportTab()
-        self._submit_tab     = SubmitTab(self._get_reddit, self._post_log, self._favorites,
+        self._import_tab     = ImportTab(self._get_reddit, self._flair_store, self._favorites)
+        self._submit_tab     = SubmitTab(self._get_reddit, self._post_log,
                                          self._import_tab.get_posts)
         self._karma_tab      = KarmaTab(self._get_reddit, self._post_log)
         self._results_tab    = ResultsTab()
@@ -107,11 +112,21 @@ class RedditDashboard(QMainWindow):
 
         self._config_tab.credentials_saved.connect(self._on_credentials_saved)
         self._config_tab.test_requested.connect(self._test_connection)
-        self._search_tab.load_requested.connect(self._import_tab.load_posts)
-        self._search_tab.load_requested.connect(
-            lambda _: self._tabs.setCurrentWidget(self._import_tab)
-        )
         self._submit_tab.submission_finished.connect(self._on_submission_finished)
+
+        # Permanent log console below the tabs (shows logging output in-app —
+        # handy for the packaged .exe, which has no terminal).
+        self._log_console = LogConsole(level=logging.INFO)
+        self._log_console.install()   # attach to the root logger
+
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self._tabs)
+        splitter.addWidget(self._log_console)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setCollapsible(0, False)
+        splitter.setSizes([720, 160])
+        layout.addWidget(splitter)
 
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
@@ -188,6 +203,7 @@ class RedditDashboard(QMainWindow):
     def closeEvent(self, event):
         logger.info("=== Application Closing ===")
         self._search_tab.stop_workers_on_close()
+        self._import_tab.stop_worker_on_close()
         self._submit_tab.stop_worker_on_close()
         self._karma_tab.stop_workers_on_close()
         event.accept()
