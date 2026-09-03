@@ -10,9 +10,12 @@ __pycache__/
 env/
 venv/
 ENV/
+.build-venv/
 
 # Project Data (Credentials & local db)
-data/
+data/*
+# ...but keep the credential template so others know the format
+!data/reddit_config.example.json
 
 # Build and Distribution
 build/

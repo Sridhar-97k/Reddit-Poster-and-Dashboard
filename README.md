@@ -1,98 +1,135 @@
 # Reddit Dashboard
 
-A Windows desktop application for batch-posting to Reddit, tracking karma, and managing post workflows — without touching the Reddit website.
+A Windows desktop app for **batch-posting links to Reddit**, managing flairs, and tracking karma — all from a spreadsheet-style interface, without touching the Reddit website.
 
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 ![Python](https://img.shields.io/badge/python-3.8+-green)
+![License](https://img.shields.io/badge/license-MIT-lightgrey)
+
+---
+
+## Highlights
+
+- 📋 **Spreadsheet editor** — compose posts in a spreadsheet-style grid (copy/paste, fill-handle, export `.csv` backup)
+- 🔍 **Search & import** — find posts on Reddit with Lucene syntax and load them straight into your queue
+- 🎨 **Flair database** — pull a subreddit's real flairs with one click and pick them from a dropdown; flair is attached *at submit time* so **flair-required subreddits work**
+- 🚀 **Batch submission** — post many links with a configurable delay, automatic rate-limit back-off, and a detailed live log
+- 📊 **Karma tracker** — refresh scores/comments for your recent posts and everything you've logged
+- 🔒 **Local only** — credentials and data never leave your machine; nothing is committed to the repo
 
 ---
 
 ## Quick Start
 
 ```bash
+git clone <your-fork-url> reddit_share
+cd reddit_share
 pip install -r requirements.txt
 python main.py
 ```
 
-Or double-click `run_app.bat` (installs nothing — you must run `pip install -r requirements.txt` first).
+On Windows you can also double-click **`run_app.bat`** (run `pip install -r requirements.txt` once first).
 
-To build a standalone `.exe`:
+To build a standalone executable, double-click **`build.bat`** or run:
+
 ```bash
-pip install pyinstaller
-python scripts/build_exe.py
-# output: dist/RedditDashboard.exe
+python scripts/build_exe.py     # → dist/RedditDashboard.exe
 ```
+
+The build runs inside a dedicated, isolated virtual environment (`.build-venv/`) containing only this app's declared dependencies plus PyInstaller — so the executable is reproducible across machines and free of unrelated bloat. Four clearly-labelled stages: prepare build env → generate icons → clean → bundle.
 
 ---
 
 ## Reddit App Setup (one-time)
 
-1. Go to [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)
-2. Click **Create App** → choose type **script**
-3. Set redirect URI to `http://localhost:8080`
-4. Copy **Client ID** (under the app name) and **Client Secret**
-5. In the app, go to **Configuration** tab → enter credentials → **Save** → **Test Connection**
+You need your own Reddit "script" app to get an API key. This is free and takes a minute.
 
-Credentials are stored in `data/reddit_config.json`. Do not commit this file.
+1. Go to **[reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)**
+2. Click **Create App** (or **Create Another App**) → choose type **script**
+3. Set the redirect URI to `http://localhost:8080`
+4. Copy the **Client ID** (the string under the app's name) and the **Client Secret**
+5. Launch the app → **⚙️ Configuration** tab → enter Client ID, Client Secret, your Reddit username and password → **Save** → **Test Connection**
+
+Your credentials are written to `data/reddit_config.json`, which is **git-ignored** and stays on your machine. A template is provided at [`data/reddit_config.example.json`](data/reddit_config.example.json).
+
+> **Note:** The password grant used here requires **2FA to be disabled** on the account (a Reddit limitation for script apps). Accounts that sign in only via Google/Apple have no Reddit password and won't work.
 
 ---
 
-## Features
+## Typical Workflow
 
-### Search & import
-- Query Reddit directly using Lucene syntax (e.g., `title:python url:github.com`)
-- View thumbnail previews of search results
-- Select and load search results directly into the Import tab with one click
+1. **⚙️ Configuration** — enter and test your credentials (once).
+2. **📂 Posts** — type or paste rows into the grid: `subreddit`, `title`, `url`, and optional `flair`. (Or use **🔍 Search** to find posts and load them here.)
+3. **🎨 Get Flairs** — click it on the Posts tab to fetch the current flairs for every subreddit in your grid. Then click any **Flair** cell to pick from a dropdown.
+4. **🚀 Batch Submit** — set the delay, hit **Start**, and watch the live log.
+5. **✅ Results** — review what succeeded/failed (with reasons); export to CSV if you like.
+6. **📊 Karma Stats** — later, refresh scores for your posts.
 
-### Built-in spreadsheet editor
-The **Import Excel** tab is an editable grid — no external Excel needed:
-- Type directly into cells
-- `Ctrl+C` / `Ctrl+V` copy and paste (compatible with Excel clipboard format)
-- Paste to a larger selection tiles the data to fill it
-- Fill handle (blue square at bottom-right of selection) — drag to repeat values or continue an arithmetic series (`1, 2, 3` → `4, 5, 6`)
-- `Delete` clears selected cells
-- Import from / export to `.xlsx` at any time
+---
 
-Post columns: **subreddit** · **title** · **url** · **flair** (optional)
+## Tabs Reference
 
-### Batch submission
-- Configurable delay between posts (default 30 s; Reddit enforces ~10 min for new accounts)
-- On rate-limit error, waits the Reddit-mandated time and retries once automatically
-- Live progress log and stop button
+### ⚙️ Configuration
+Enter your Reddit API credentials and test the connection. Saved to `data/reddit_config.json`.
 
-### Post-submission results
-- View a comprehensive summary of successful and failed posts after a batch submission
-- Review exact error reasons for failed posts (e.g., rate limits, missing flair)
-- One-click export of the results log to an Excel file
+### ⭐ Subreddits
+Save frequently used subreddits (usage auto-increments after each successful post), import them from your post history or a text file, and generate a pre-filled template spreadsheet.
 
-### Karma tracker
-- View and refresh scores for your N most recent posts
-- Search posts by subreddit
-- One-click bulk karma update for all entries in the post log
-- Export to Excel
+### 🔍 Search
+Query Reddit using Lucene field operators (e.g. `title:python url:github.com`, `flair:"Discussion"`). Browse results with thumbnails, copy links, and load selected rows straight into the Posts grid.
 
-### Subreddit favourites
-- Save frequently used subreddits; usage count increments automatically after each successful post
-- Import from your post history or a text file
-- Generate a pre-filled template spreadsheet from your favourites list
+### 📂 Posts
+An editable, spreadsheet-style grid — no external file required:
+
+| Column | Meaning |
+|--------|---------|
+| `subreddit` | Target subreddit (no `r/` prefix needed) |
+| `title` | Post title |
+| `url` | Link to submit |
+| `flair` | *(optional)* flair name — pick from the dropdown after **Get Flairs** |
+
+Editing niceties: `Ctrl+C` / `Ctrl+V` (Excel-compatible clipboard), paste-to-fill tiling, fill-handle drag (repeats values or continues a series like `1,2,3 → 4,5,6`), and `Delete` to clear. You can **Export to CSV** for a backup, but composing posts happens entirely in this grid — there's no import step.
+
+### 🚀 Batch Submit
+Submits every valid row one by one.
+
+- **Delay between posts** — default **10 s** (raise it if you get rate-limited).
+- **Automatic rate-limit handling** — on a Reddit `RATELIMIT` error, it waits the mandated time and retries once.
+- **Detailed log** — timestamped per-post progress plus an end-of-run summary with permalinks and failure reasons. Failures are also written to the terminal/stdout log with full tracebacks.
+
+> Reddit rate-limits link posts heavily, especially for newer or low-karma accounts (often ~10 minutes between link posts). If posts fail after the first, increase the delay.
+
+### 📊 Karma Stats
+Refresh score/comment counts for your N most recent posts, search your posts by subreddit, bulk-update karma for everything in the post log, and export to CSV. All posts you submit are logged to `data/reddit_posts_log.csv`.
+
+### ✅ Results
+A summary of the last batch: success/failure counts, success rate, per-post reasons, and one-click export.
+
+---
+
+## Flairs
+
+Some subreddits **require** a flair before a post is accepted. This app handles that:
+
+1. Put your subreddits in the Posts grid and click **🎨 Get Flairs**. It fetches each subreddit's link-flair templates and caches them in `data/subreddit_flairs.csv` (a small, viewable "database").
+2. Click a **Flair** cell → choose from the dropdown of that subreddit's flairs (the field stays editable, so you can also type a custom value).
+3. On submit, the app resolves your flair text to the flair's template ID and **attaches it at submission time**, satisfying flair-required subreddits.
+
+Matching is case-insensitive: it tries an exact match first, then a substring match, and skips mod-only flairs you can't apply. If nothing matches, the available flairs are listed in the log so you can see exactly what the subreddit offers.
 
 ---
 
 ## CLI Tools
 
-Both tools read credentials from `data/reddit_config.json`.
+Reads credentials from `data/reddit_config.json` (set them up via the GUI first).
 
 ```bash
-# Bulk poster with crosspost support
-python cli/share.py --excel posts.xlsx
-python cli/share.py --excel posts.xlsx --dry-run
-
-# List post flair templates for a subreddit
+# List a subreddit's post-flair templates (id + text)
 python cli/flair.py --subreddit python
 python cli/flair.py --subreddit python --csv data/python_flairs.csv
 ```
 
-`cli/share.py` reads an Excel sheet named **posts** with columns `title`, `link`, `subreddit`, `crosspost` (comma-separated list of subreddits for crossposting). Configure per-subreddit flairs via `PRIMARY_FLAIRS` / `CROSSPOST_FLAIRS` dicts at the top of the file.
+`cli/flair.py` prints each link-flair template's `id`, `text`, colors, and whether it's mod-only — handy for discovering the exact flair text to use in the Posts grid. Use `--csv` to save the list to a file.
 
 ---
 
@@ -100,58 +137,65 @@ python cli/flair.py --subreddit python --csv data/python_flairs.csv
 
 ```
 reddit_share/
-├── main.py                  # Entry point
-├── run_app.bat              # Windows launcher
+├── main.py                  # Entry point (QApplication setup)
+├── run_app.bat              # Windows launcher (run the app)
+├── build.bat                # Windows launcher (build the .exe)
 ├── requirements.txt
 │
 ├── app/                     # GUI application package
-│   ├── dashboard.py         # Main window — assembles tabs, owns Reddit connection
-│   ├── workers.py           # Background threads (QThread subclasses)
-│   ├── post_log.py          # Post log Excel operations
+│   ├── dashboard.py         # Main window — assembles tabs, owns the Reddit connection
+│   ├── workers.py           # Background threads (submit, karma, flair fetch)
+│   ├── post_log.py          # Post-log CSV operations
 │   ├── favorites.py         # Favourites JSON operations
-│   ├── utils.py             # Shared Excel export helper
+│   ├── flair_store.py       # Flair database (CSV-backed cache)
+│   ├── utils.py             # Shared CSV-export helper
 │   ├── tabs/                # One QWidget per tab
-│   │   ├── search_tab.py    # Reddit search and import
-│   │   ├── import_tab.py    # Posts spreadsheet editor
+│   │   ├── config_tab.py    # Credentials
+│   │   ├── subreddits_tab.py# Favourites manager
+│   │   ├── search_tab.py    # Reddit search & import
+│   │   ├── import_tab.py    # Posts spreadsheet + Get Flairs
 │   │   ├── submit_tab.py    # Batch submitter
-│   │   ├── results_tab.py   # Post-submission summary and log
 │   │   ├── karma_tab.py     # Karma tracker
-│   │   ├── subreddits_tab.py# Subreddit favourites manager
-│   │   └── config_tab.py    # Credentials configuration
+│   │   └── results_tab.py   # Submission summary
 │   └── widgets/
 │       └── spreadsheet.py   # SpreadsheetWidget (editable grid)
 │
 ├── cli/
-│   ├── share.py             # Bulk poster + crossposting
 │   └── flair.py             # Flair template lister
 │
 ├── scripts/
-│   └── build_exe.py         # PyInstaller wrapper
+│   ├── build_exe.py         # Build framework (installs deps, builds the .exe)
+│   └── make_icons.py        # Generates the app icon (PNG + ICO)
 │
-└── data/                    # Runtime data — do not commit
-    ├── reddit_config.json
-    ├── subreddit_favorites.json
-    └── reddit_posts_log.xlsx
+├── assets/                  # App icon (icon.png / icon.ico)
+│
+└── data/                    # Runtime data — git-ignored (except the template)
+    ├── reddit_config.example.json   # ← committed template
+    ├── reddit_config.json           # your credentials (ignored)
+    ├── subreddit_favorites.json     # (ignored)
+    ├── subreddit_flairs.csv         # flair DB (ignored)
+    └── reddit_posts_log.csv         # post history (ignored)
 ```
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Check |
-|---------|-------|
-| "invalid_grant" on connect | Username/password wrong, or 2FA enabled (disable it) |
-| "401 Unauthorized" | Client ID or Secret is wrong; app type must be "script" |
-| Posts fail after the first | Increase delay in Batch Submit tab; Reddit rate-limits link posts heavily for new accounts |
-| Flair not applied | Run `cli/flair.py` to get the exact flair IDs, then set them in `cli/share.py` |
-| Excel import shows no rows | Row 1 must be headers; all of subreddit, title, and url must be filled |
+| Symptom | Likely cause / fix |
+|---------|--------------------|
+| `invalid_grant` on connect | Wrong username/password, or **2FA is enabled** (disable it), or the account uses Google/Apple sign-in (no Reddit password) |
+| `401 Unauthorized` | Client ID or Secret is wrong; the Reddit app type must be **script** |
+| Post fails on a subreddit that needs flair | Click **🎨 Get Flairs**, then pick the flair from the dropdown before submitting |
+| Flair "not found" | The log lists the subreddit's actual flairs — copy the exact text; note some flairs are mod-only and can't be applied |
+| Posts fail after the first | Increase the delay in **Batch Submit**; Reddit rate-limits link posts heavily |
+| A row is skipped on submit | `subreddit`, `title`, and `url` must all be filled for a row to be submitted |
 
 ---
 
-## Security
+## Security & Privacy
 
-- `data/reddit_config.json` stores credentials in plain text — keep it out of version control
-- No telemetry, no cloud connection, no data leaves your machine
+- Credentials live only in `data/reddit_config.json` (plain text, **git-ignored**). Never commit it — use `reddit_config.example.json` as the shareable template.
+- No telemetry, no cloud, no third-party servers. The app talks only to Reddit's API.
 
 ---
 
@@ -159,8 +203,12 @@ reddit_share/
 
 | Package | Purpose |
 |---------|---------|
-| `praw` | Reddit API |
+| `praw` | Reddit API client |
 | `PyQt5` | Desktop GUI |
-| `openpyxl` | Excel read/write |
-| `pandas` | CLI Excel parsing (`cli/share.py`) |
-| `requests` | HTTP (PRAW dependency) |
+| `requests` | HTTP (thumbnails, PRAW dependency) |
+
+---
+
+## License
+
+Released under the MIT License — see [LICENSE](LICENSE). You're free to use, modify, and distribute it.

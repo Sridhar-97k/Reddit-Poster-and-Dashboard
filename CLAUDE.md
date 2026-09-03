@@ -5,21 +5,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Run the GUI desktop app
+# Run the GUI desktop app  (or double-click run_app.bat)
 python main.py
 
-# Run the CLI tools
-python cli/share.py --excel posts.xlsx
-python cli/share.py --excel posts.xlsx --dry-run
+# Run the CLI tool
 python cli/flair.py --subreddit python
 python cli/flair.py --subreddit python --csv data/python_flairs.csv
 
-# Build Windows executable
+# Build Windows executable  (or double-click build.bat)
+# Builds inside an isolated .build-venv (only requirements + PyInstaller) so the
+# .exe is reproducible and slim. → dist/RedditDashboard.exe
 python scripts/build_exe.py
 
-# Install dependencies
+# Install dependencies (run_app.bat/build.bat assume these are installed)
 pip install -r requirements.txt
-pip install pyinstaller  # only needed for building .exe
 ```
 
 ## Repository layout
@@ -27,20 +26,21 @@ pip install pyinstaller  # only needed for building .exe
 ```
 reddit_share/
 ├── main.py                  # Entry point (QApplication setup)
-├── run_app.bat              # Windows double-click launcher
+├── run_app.bat              # Windows double-click launcher (run)
+├── build.bat                # Windows double-click launcher (build .exe)
 ├── requirements.txt         # pip dependencies
 │
 ├── app/                     # GUI application package
 │   ├── __init__.py          # Exports ROOT_DIR, DATA_DIR
 │   ├── dashboard.py         # RedditDashboard(QMainWindow) — assembles tabs, owns reddit instance
-│   ├── workers.py           # RedditWorker, KarmaWorker, BulkKarmaUpdateWorker (QThread subclasses)
-│   ├── post_log.py          # PostLog — openpyxl operations on reddit_posts_log.xlsx
+│   ├── workers.py           # RedditWorker, UserPostsWorker, FlairFetchWorker (QThread subclasses)
+│   ├── post_log.py          # PostLog — CSV operations on reddit_posts_log.csv
 │   ├── favorites.py         # FavoritesManager — JSON favorites CRUD
-│   ├── utils.py             # export_table_to_excel() shared helper
+│   ├── utils.py             # export_table_to_csv() shared helper
 │   ├── tabs/
 │   │   ├── config_tab.py    # ConfigTab(QWidget) — credential form
 │   │   ├── subreddits_tab.py# SubredditsTab(QWidget) — favorites management UI
-│   │   ├── import_tab.py    # ImportTab(QWidget) — editable SpreadsheetWidget + Excel I/O
+│   │   ├── import_tab.py    # ImportTab(QWidget) — editable SpreadsheetWidget + CSV export
 │   │   ├── submit_tab.py    # SubmitTab(QWidget) — batch submission + progress
 │   │   ├── karma_tab.py     # KarmaTab(QWidget) — karma stats, search, bulk update
 │   │   └── results_tab.py   # ResultsTab(QWidget) — submission results table
@@ -48,16 +48,22 @@ reddit_share/
 │       └── spreadsheet.py   # SpreadsheetWidget — Excel-like editing (copy/paste, fill handle)
 │
 ├── cli/
-│   ├── share.py             # Bulk poster CLI (reads data/reddit_config.json)
 │   └── flair.py             # Lists link flair templates for a subreddit
 │
 ├── scripts/
-│   └── build_exe.py         # PyInstaller wrapper
+│   ├── build_exe.py         # Isolated-venv build framework (prep→icons→clean→bundle)
+│   └── make_icons.py        # Generates assets/icon.png + icon.ico from Qt painter
 │
-└── data/                    # Runtime data — do not commit
+├── assets/                  # App icon (committed)
+│   ├── icon.png             # 256x256 window/taskbar icon
+│   └── icon.ico             # multi-size Windows .exe icon
+│
+└── data/                    # Runtime data — do not commit (except the template)
+    ├── reddit_config.example.json  # committed credential template
     ├── reddit_config.json   # Reddit API credentials
     ├── subreddit_favorites.json
-    └── reddit_posts_log.xlsx
+    ├── subreddit_flairs.csv # flair database
+    └── reddit_posts_log.csv
 ```
 
 ## Architecture
@@ -83,6 +89,6 @@ All PRAW API calls happen inside worker threads (`app/workers.py`), never on the
 
 ## CLI tools
 
-**`cli/share.py`** — bulk poster. Reads `data/reddit_config.json`. Excel sheet named `posts` with columns `title`, `link`, `subreddit`, `crosspost` (CSV). Configure flairs in `PRIMARY_FLAIRS` / `CROSSPOST_FLAIRS` dicts at the top of the file.
+**`cli/flair.py`** — lists post flair templates for a subreddit. Reads `data/reddit_config.json`. Use `--csv` to save output.
 
-**`cli/flair.py`** — lists post flair templates for a subreddit. Reads same config file. Use `--csv` to save output.
+> A bulk-poster CLI (`cli/share.py`, Excel-driven) was removed. The GUI's Batch Submit tab is the batch-posting path. Re-add an Excel/CLI flow only if the need returns.
