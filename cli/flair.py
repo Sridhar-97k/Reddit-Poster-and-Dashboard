@@ -14,7 +14,7 @@ import os
 import sys
 
 import praw
-from praw.exceptions import APIException, PRAWException, ClientException
+from praw.exceptions import RedditAPIException, PRAWException, ClientException
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'reddit_config.json')
 
@@ -51,7 +51,7 @@ def main():
 
     try:
         templates = list(reddit.subreddit(sub_name).flair.link_templates)
-    except (APIException, PRAWException, ClientException) as e:
+    except (RedditAPIException, PRAWException, ClientException) as e:
         print(f"Failed to fetch flairs for r/{sub_name}: {e}", file=sys.stderr)
         sys.exit(1)
 
