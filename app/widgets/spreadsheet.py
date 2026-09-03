@@ -132,6 +132,13 @@ class SpreadsheetWidget(QTableWidget):
         )
         self.setAlternatingRowColors(True)
 
+        # Drop the in-cell editor border entirely: the global stylesheet gives
+        # every QLineEdit a 2px border + 8px padding, which looks bulky in a cell.
+        self.setStyleSheet(
+            "QLineEdit { border: none; border-radius: 0px; padding: 0px 2px; }"
+            "QComboBox { border: none; border-radius: 0px; padding: 0px 2px; }"
+        )
+
         self._fill_handle = _FillHandle(self)
 
         self.itemSelectionChanged.connect(self._reposition_handle)
@@ -149,7 +156,7 @@ class SpreadsheetWidget(QTableWidget):
             return
         if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             # Only clear when not currently editing a cell
-            if not self.isPersistentEditorOpen(self.currentIndex()):
+            if self.state() != QAbstractItemView.EditingState:
                 self._delete_selected()
                 return
         super().keyPressEvent(event)
