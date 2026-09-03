@@ -1,10 +1,11 @@
 import os
 import sys
+import csv
+import subprocess
 import logging
 from datetime import datetime
 
-from openpyxl import load_workbook, Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
+from .csv_utils import safe_row
 
 logger = logging.getLogger(__name__)
 
@@ -13,33 +14,23 @@ HEADERS = [
     'Title', 'URL', 'Reddit Link', 'Score', 'Comments',
     'Last Updated', 'Status', 'Notes'
 ]
-COL_WIDTHS = [15, 12, 10, 18, 50, 40, 50, 10, 10, 18, 12, 30]
+
+# Column indices used when updating rows in place
+COL_ID, COL_SCORE, COL_COMMENTS, COL_UPDATED = 0, 7, 8, 9
 
 
 class PostLog:
-    def __init__(self, filepath='reddit_posts_log.xlsx'):
+    def __init__(self, filepath='reddit_posts_log.csv'):
         self.filepath = filepath
 
     def initialize(self):
-        """Create the log file with headers if it doesn't already exist."""
+        """Create the log file with a header row if it doesn't already exist."""
         if os.path.exists(self.filepath):
             logger.info(f"Post log exists: {self.filepath}")
             return
-
         try:
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Post Log"
-
-            for col, (header, width) in enumerate(zip(HEADERS, COL_WIDTHS), 1):
-                cell = ws.cell(row=1, column=col)
-                cell.value = header
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
-                cell.alignment = Alignment(horizontal='center')
-                ws.column_dimensions[cell.column_letter].width = width
-
-            wb.save(self.filepath)
+            with open(self.filepath, 'w', newline='', encoding='utf-8-sig') as f:
+                csv.writer(f).writerow(HEADERS)
             logger.info(f"Created post log: {self.filepath}")
         except Exception as e:
             logger.error(f"Failed to create post log: {e}")
@@ -47,62 +38,92 @@ class PostLog:
     def log_post(self, post_data):
         """Append one successfully submitted post to the log."""
         try:
-            wb = load_workbook(self.filepath)
-            ws = wb.active
-            row = ws.max_row + 1
             now = datetime.now()
-
-            ws.cell(row=row, column=1, value=post_data.get('id', ''))
-            ws.cell(row=row, column=2, value=now.strftime('%Y-%m-%d'))
-            ws.cell(row=row, column=3, value=now.strftime('%H:%M:%S'))
-            ws.cell(row=row, column=4, value=post_data.get('subreddit', ''))
-            ws.cell(row=row, column=5, value=post_data.get('title', ''))
-            ws.cell(row=row, column=6, value=post_data.get('url', ''))
-            ws.cell(row=row, column=7, value=post_data.get('permalink', ''))
-            ws.cell(row=row, column=8, value=post_data.get('score', 0))
-            ws.cell(row=row, column=9, value=post_data.get('comments', 0))
-            ws.cell(row=row, column=10, value=now.strftime('%Y-%m-%d %H:%M:%S'))
-            ws.cell(row=row, column=11, value='Posted')
-            ws.cell(row=row, column=12, value='')
-
-            for col in (8, 9):
-                ws.cell(row=row, column=col).alignment = Alignment(horizontal='center')
-
-            wb.save(self.filepath)
-            logger.info(f"Logged post at row {row}: {post_data.get('title', '')[:40]}")
+            row = [
+                post_data.get('id', ''),
+                now.strftime('%Y-%m-%d'),
+                now.strftime('%H:%M:%S'),
+                post_data.get('subreddit', ''),
+                post_data.get('title', ''),
+                post_data.get('url', ''),
+                post_data.get('permalink', ''),
+                post_data.get('score', 0),
+                post_data.get('comments', 0),
+                now.strftime('%Y-%m-%d %H:%M:%S'),
+                'Posted',
+                '',
+            ]
+            with open(self.filepath, 'a', newline='', encoding='utf-8-sig') as f:
+                csv.writer(f).writerow(safe_row(row))
+            logger.info(f"Logged post: {post_data.get('title', '')[:40]}")
             return True
         except Exception as e:
             logger.error(f"Failed to log post: {e}")
             return False
 
+    def upsert_posts(self, posts):
+        """Insert or update posts (matched by id). Used to sync the user's full
+        submission history into the log. `posts` is a list of dicts with keys
+        id, subreddit, title, url, permalink, score, comments, and created
+        (a datetime). Returns the number of posts processed."""
+        rows = self._read() or [list(HEADERS)]
+        if not rows:
+            rows = [list(HEADERS)]
+        index = {r[COL_ID]: r for r in rows[1:] if r and r[COL_ID]}
+
+        for p in posts:
+            pid = p.get('id', '')
+            if not pid:
+                continue
+            row = index.get(pid)
+            if row is None:
+                row = [''] * len(HEADERS)
+                row[COL_ID] = pid
+                rows.append(row)
+                index[pid] = row
+            self._pad(row)
+            created = p.get('created')
+            if created is not None:
+                row[1] = created.strftime('%Y-%m-%d')
+                row[2] = created.strftime('%H:%M:%S')
+            row[3] = p.get('subreddit', '')
+            row[4] = p.get('title', '')
+            row[5] = p.get('url', '')
+            row[6] = p.get('permalink', '')
+            row[COL_SCORE] = p.get('score', 0)
+            row[COL_COMMENTS] = p.get('comments', 0)
+            row[COL_UPDATED] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if not row[10]:
+                row[10] = 'Posted'
+
+        self._write(rows)
+        return len(posts)
+
     def update_karma(self, post_id, score, comments):
         """Update score and comment count for a specific post ID."""
-        try:
-            wb = load_workbook(self.filepath)
-            ws = wb.active
-            for row in range(2, ws.max_row + 1):
-                if ws.cell(row=row, column=1).value == post_id:
-                    ws.cell(row=row, column=8, value=score)
-                    ws.cell(row=row, column=9, value=comments)
-                    ws.cell(row=row, column=10, value=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                    wb.save(self.filepath)
-                    return True
-            logger.warning(f"Post {post_id} not found in log")
+        rows = self._read()
+        if rows is None:
             return False
-        except Exception as e:
-            logger.error(f"Failed to update karma: {e}")
-            return False
+        for row in rows[1:]:
+            if row and row[COL_ID] == post_id:
+                self._pad(row)
+                row[COL_SCORE] = score
+                row[COL_COMMENTS] = comments
+                row[COL_UPDATED] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                return self._write(rows)
+        logger.warning(f"Post {post_id} not found in log")
+        return False
 
     def get_stats(self):
         """Return aggregate stats from the log, or None on error."""
-        if not os.path.exists(self.filepath):
+        rows = self._read()
+        if rows is None:
             return None
         try:
-            wb = load_workbook(self.filepath, data_only=True)
-            ws = wb.active
-            total_posts = ws.max_row - 1
-            total_karma = sum((ws.cell(row=r, column=8).value or 0) for r in range(2, ws.max_row + 1))
-            total_comments = sum((ws.cell(row=r, column=9).value or 0) for r in range(2, ws.max_row + 1))
+            data = [r for r in rows[1:] if r and r[COL_ID]]
+            total_posts = len(data)
+            total_karma = sum(self._as_int(r, COL_SCORE) for r in data)
+            total_comments = sum(self._as_int(r, COL_COMMENTS) for r in data)
             return {
                 'total_posts': total_posts,
                 'total_karma': total_karma,
@@ -121,10 +142,43 @@ class PostLog:
             if sys.platform == 'win32':
                 os.startfile(self.filepath)
             elif sys.platform == 'darwin':
-                os.system(f'open "{self.filepath}"')
+                subprocess.run(['open', self.filepath], check=False)
             else:
-                os.system(f'xdg-open "{self.filepath}"')
+                subprocess.run(['xdg-open', self.filepath], check=False)
             return True
         except Exception as e:
             logger.error(f"Failed to open log file: {e}")
             return False
+
+    # ------------------------------------------------------------------ helpers
+
+    def _read(self):
+        if not os.path.exists(self.filepath):
+            return None
+        try:
+            with open(self.filepath, newline='', encoding='utf-8-sig') as f:
+                return list(csv.reader(f))
+        except Exception as e:
+            logger.error(f"Failed to read post log: {e}")
+            return None
+
+    def _write(self, rows):
+        try:
+            with open(self.filepath, 'w', newline='', encoding='utf-8-sig') as f:
+                csv.writer(f).writerows(safe_row(r) for r in rows)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to write post log: {e}")
+            return False
+
+    @staticmethod
+    def _pad(row, size=len(HEADERS)):
+        while len(row) < size:
+            row.append('')
+
+    @staticmethod
+    def _as_int(row, idx):
+        try:
+            return int(float(row[idx])) if idx < len(row) and row[idx] != '' else 0
+        except (ValueError, TypeError):
+            return 0
