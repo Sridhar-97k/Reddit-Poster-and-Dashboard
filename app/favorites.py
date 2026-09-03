@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class FavoritesManager:
     def __init__(self, filepath='subreddit_favorites.json'):
         self.filepath = filepath
-        self.favorites = []  # list of {'name': str, 'added': iso str, 'times_used': int}
+        self.favorites = []  # list of {'name': str, 'added': iso str}
 
     def load(self):
         try:
@@ -36,7 +36,7 @@ class FavoritesManager:
         name = name.lower().removeprefix('r/')
         if any(f['name'] == name for f in self.favorites):
             return False
-        self.favorites.append({'name': name, 'added': datetime.now().isoformat(), 'times_used': 0})
+        self.favorites.append({'name': name, 'added': datetime.now().isoformat()})
         self.save()
         return True
 
@@ -49,16 +49,6 @@ class FavoritesManager:
         self.save()
         return True
 
-    def increment_usage(self, subreddit_names):
-        """Increment times_used for every favorite whose name is in subreddit_names (lowercase set)."""
-        changed = False
-        for fav in self.favorites:
-            if fav['name'] in subreddit_names:
-                fav['times_used'] = fav.get('times_used', 0) + 1
-                changed = True
-        if changed:
-            self.save()
-
-    def sorted_by_usage(self):
-        """Return favorites sorted by times_used descending."""
-        return sorted(self.favorites, key=lambda x: x.get('times_used', 0), reverse=True)
+    def sorted_by_name(self):
+        """Return favorites sorted alphabetically by name."""
+        return sorted(self.favorites, key=lambda x: x['name'])
