@@ -45,21 +45,21 @@ class _SearchWorker(QThread):
     results_ready = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, reddit, subreddit, query, sort, time_filter, limit, nsfw_only):
+    def __init__(self, reddit, subreddit, query, sort, time_filter, limit, include_nsfw):
         super().__init__()
-        self.reddit      = reddit
-        self.subreddit   = subreddit or 'all'
-        self.query       = query
-        self.sort        = sort
-        self.time_filter = time_filter
-        self.limit       = limit
-        self.nsfw_only   = nsfw_only
+        self.reddit       = reddit
+        self.subreddit    = subreddit or 'all'
+        self.query        = query
+        self.sort         = sort
+        self.time_filter  = time_filter
+        self.limit        = limit
+        self.include_nsfw = include_nsfw
 
     def run(self):
         try:
             q = self.query.strip()
-            if self.nsfw_only and 'nsfw:' not in q.lower():
-                q = (q + ' nsfw:yes').strip()
+            if not self.include_nsfw and 'nsfw:' not in q.lower():
+                q = (q + ' nsfw:no').strip()
 
             sub = self.reddit.subreddit(self.subreddit)
             submissions = sub.search(q, syntax='lucene', sort=self.sort,
@@ -158,10 +158,8 @@ def _copy_to_clipboard(url: str, btn: QPushButton):
 # ---------------------------------------------------------------------------
 
 class SearchTab(QWidget):
-    """Reddit search with Lucene field operators, thumbnail results,
-    per-row copy and Redgifs player, and one-click load to the Import tab."""
-
-    load_requested = pyqtSignal(list)
+    """Reddit search with Lucene field operators, thumbnail results, and
+    per-row copy of the link URL."""
 
     def __init__(self, get_reddit):
         super().__init__()
@@ -244,10 +242,11 @@ class SearchTab(QWidget):
         self.limit_spin.setValue(25)
         olayout.addWidget(self.limit_spin)
 
-        self.nsfw_check = QCheckBox("NSFW only")
+        self.nsfw_check = QCheckBox("Include NSFW results")
         self.nsfw_check.setToolTip(
-            "Appends nsfw:yes to show only NSFW-tagged posts.\n"
-            "Leave unchecked to see all results (account preferences apply)."
+            "When checked, NSFW-tagged posts are included alongside SFW results.\n"
+            "When unchecked, they are filtered out (appends nsfw:no).\n"
+            "Account 'adult content' preferences still apply."
         )
         olayout.addWidget(self.nsfw_check)
 
@@ -268,14 +267,6 @@ class SearchTab(QWidget):
         self.results_label.setStyleSheet("font-weight: bold;")
         rheader.addWidget(self.results_label)
         rheader.addStretch()
-        self.load_btn = QPushButton("📥 Load Selected to Import Tab")
-        self.load_btn.setToolTip(
-            "Load selected rows into the Posts spreadsheet.\n"
-            "Nothing selected = load all results."
-        )
-        self.load_btn.clicked.connect(self._load_selected)
-        self.load_btn.setEnabled(False)
-        rheader.addWidget(self.load_btn)
         layout.addLayout(rheader)
 
         # ── Results table ─────────────────────────────────────────────
@@ -338,7 +329,6 @@ class SearchTab(QWidget):
         self.search_btn.setText("⏳ Searching…")
         self.table.setRowCount(0)
         self._results = []
-        self.load_btn.setEnabled(False)
         self.results_label.setText("Searching…")
 
         self._search_worker = _SearchWorker(
@@ -347,8 +337,8 @@ class SearchTab(QWidget):
             query       = query,
             sort        = self.sort_combo.currentData(),
             time_filter = self.time_combo.currentData(),
-            limit       = self.limit_spin.value(),
-            nsfw_only   = self.nsfw_check.isChecked(),
+            limit        = self.limit_spin.value(),
+            include_nsfw = self.nsfw_check.isChecked(),
         )
         self._search_worker.results_ready.connect(self._on_results)
         self._search_worker.error.connect(self._on_error)
@@ -360,7 +350,6 @@ class SearchTab(QWidget):
         self.search_btn.setText("🔍 Search")
         n = len(results)
         self.results_label.setText(f"{n} result{'s' if n != 1 else ''}")
-        self.load_btn.setEnabled(bool(results))
 
         self.table.setRowCount(n)
         thumb_queue = []
@@ -429,19 +418,6 @@ class SearchTab(QWidget):
             url = item.data(Qt.UserRole)
             if url:
                 webbrowser.open(url)
-
-    def _load_selected(self):
-        sel_rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
-        posts = [self._results[r] for r in (sel_rows or range(len(self._results)))
-                 if r < len(self._results)]
-        if not posts:
-            return
-        self.load_requested.emit(posts)
-        QMessageBox.information(
-            self, 'Loaded',
-            f'Loaded {len(posts)} post{"s" if len(posts) != 1 else ""} into the Posts tab.\n'
-            'Switch to the Posts tab to review before submitting.'
-        )
 
     # ------------------------------------------------------------------ cleanup
 
