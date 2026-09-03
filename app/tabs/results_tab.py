@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QLabel,
                              QHeaderView, QMessageBox)
 from PyQt5.QtGui import QColor
 
-from ..utils import export_table_to_excel
+from ..utils import export_table_to_csv
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class ResultsTab(QWidget):
         self.results_table.setAlternatingRowColors(True)
         layout.addWidget(self.results_table)
 
-        export_btn = QPushButton("💾 Export Results to Excel")
+        export_btn = QPushButton("💾 Export Results to CSV")
         export_btn.clicked.connect(self._export)
         export_btn.setMinimumHeight(40)
         layout.addWidget(export_btn)
@@ -86,5 +86,4 @@ class ResultsTab(QWidget):
         if self.results_table.rowCount() == 0:
             QMessageBox.warning(self, 'No Data', 'No results to export.')
             return
-        export_table_to_excel(self, self.results_table, "Submission Results",
-                              "Save Results", "submission_results")
+        export_table_to_csv(self, self.results_table, "Save Results", "submission_results")

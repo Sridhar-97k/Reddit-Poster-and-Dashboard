@@ -1,17 +1,15 @@
 import logging
-from datetime import datetime
 
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                              QLabel, QLineEdit, QPushButton, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QSpinBox, QMessageBox)
-from PyQt5.QtCore import Qt
+                             QTableWidgetItem, QHeaderView, QSpinBox, QComboBox,
+                             QProgressBar, QMessageBox, QAbstractItemView, QApplication)
+from PyQt5.QtCore import Qt, QTimer
 
-from ..workers import KarmaWorker, BulkKarmaUpdateWorker
-from ..utils import export_table_to_excel
+from ..workers import UserPostsWorker
+from ..utils import export_table_to_csv
 
 logger = logging.getLogger(__name__)
-
-KARMA_COL_WIDTHS = {'A': 20, 'B': 60, 'C': 12, 'D': 12, 'E': 20, 'F': 60}
 
 
 class KarmaTab(QWidget):
@@ -19,265 +17,287 @@ class KarmaTab(QWidget):
         super().__init__()
         self._get_reddit = get_reddit
         self._post_log = post_log
-        self._karma_worker = None
-        self._bulk_worker = None
+        self._worker = None
+        self._mode = None          # 'refresh' | 'sync' | 'search'
         self._build_ui()
+
+    # ------------------------------------------------------------------ UI
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(20)
+        layout.setSpacing(12)
 
-        log_group = QGroupBox("📋 Post Log File")
-        log_layout = QVBoxLayout()
-        log_info = QLabel(
-            "All your posts are automatically logged to an Excel file.\n"
-            "Update karma to see current scores for all logged posts!"
-        )
-        log_info.setWordWrap(True)
-        log_layout.addWidget(log_info)
-        log_buttons = QHBoxLayout()
-        open_log_btn = QPushButton("📂 Open Post Log File")
-        open_log_btn.clicked.connect(self._open_log)
-        open_log_btn.setMinimumHeight(40)
-        self.update_log_btn = QPushButton("🔄 Update All Karma in Log")
-        self.update_log_btn.clicked.connect(self._bulk_update_karma)
-        self.update_log_btn.setMinimumHeight(40)
-        self.update_log_btn.setStyleSheet("background-color: #27ae60;")
-        log_buttons.addWidget(open_log_btn)
-        log_buttons.addWidget(self.update_log_btn)
-        log_layout.addLayout(log_buttons)
-        self.log_stats_label = QLabel(f"Log file: {self._post_log.filepath}")
-        self.log_stats_label.setStyleSheet("font-style: italic; color: #7f8c8d;")
-        log_layout.addWidget(self.log_stats_label)
-        log_group.setLayout(log_layout)
-        layout.addWidget(log_group)
+        # ── Your Posts controls ───────────────────────────────────────
+        controls = QGroupBox("⚙️ Your Posts")
+        cl = QVBoxLayout()
 
-        control_group = QGroupBox("⚙️ Quick View Settings")
-        control_layout = QHBoxLayout()
-        control_layout.addWidget(QLabel("Number of recent posts:"))
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Show recent:"))
         self.num_posts_spinner = QSpinBox()
-        self.num_posts_spinner.setMinimum(1)
-        self.num_posts_spinner.setMaximum(100)
-        self.num_posts_spinner.setValue(20)
-        self.num_posts_spinner.setMinimumWidth(100)
-        control_layout.addWidget(self.num_posts_spinner)
-        self.refresh_btn = QPushButton("🔄 Refresh Stats")
-        self.refresh_btn.clicked.connect(self._refresh_karma)
-        self.refresh_btn.setMinimumHeight(35)
-        control_layout.addWidget(self.refresh_btn)
-        export_btn = QPushButton("📊 Export View to Excel")
-        export_btn.clicked.connect(self._export_karma)
-        export_btn.setMinimumHeight(35)
-        control_layout.addWidget(export_btn)
-        control_layout.addStretch()
-        control_group.setLayout(control_layout)
-        layout.addWidget(control_group)
+        self.num_posts_spinner.setRange(1, 100)
+        self.num_posts_spinner.setValue(25)
+        row1.addWidget(self.num_posts_spinner)
+        self.refresh_btn = QPushButton("🔄 Refresh")
+        self.refresh_btn.clicked.connect(self._refresh)
+        row1.addWidget(self.refresh_btn)
+        self.open_log_btn = QPushButton("📂 Open Log")
+        self.open_log_btn.clicked.connect(self._open_log)
+        row1.addWidget(self.open_log_btn)
+        self.export_btn = QPushButton("📊 Export CSV")
+        self.export_btn.clicked.connect(self._export)
+        row1.addWidget(self.export_btn)
+        row1.addStretch()
+        cl.addLayout(row1)
 
-        search_group = QGroupBox("🔍 Search Posts by Subreddit")
-        search_layout = QHBoxLayout()
-        search_layout.addWidget(QLabel("Subreddit:"))
+        row2 = QHBoxLayout()
+        self.sync_btn = QPushButton("⬇️ Sync All Karma (full history)")
+        self.sync_btn.setToolTip(
+            "Fetch every post from your Reddit history and update its score and\n"
+            "comment count in the post log. Can take a while for large histories.")
+        self.sync_btn.setStyleSheet("background-color: #27ae60;")
+        self.sync_btn.clicked.connect(self._sync_all)
+        row2.addWidget(self.sync_btn)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.hide()
+        row2.addWidget(self.progress, 1)
+        self.progress_label = QLabel("")
+        self.progress_label.setStyleSheet("color: #7f8c8d;")
+        row2.addWidget(self.progress_label)
+        cl.addLayout(row2)
+
+        controls.setLayout(cl)
+        layout.addWidget(controls)
+
+        # ── Search ────────────────────────────────────────────────────
+        search = QGroupBox("🔍 Search Your Posts")
+        sl = QHBoxLayout()
+        sl.addWidget(QLabel("Subreddit:"))
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Enter subreddit name (e.g., python)")
-        search_layout.addWidget(self.search_input)
-        self.search_limit = QSpinBox()
-        self.search_limit.setMinimum(1)
-        self.search_limit.setMaximum(100)
-        self.search_limit.setValue(25)
-        self.search_limit.setPrefix("Limit: ")
-        search_layout.addWidget(self.search_limit)
-        search_btn = QPushButton("🔍 Search")
-        search_btn.clicked.connect(self._search_by_subreddit)
-        search_btn.setMinimumHeight(35)
-        search_layout.addWidget(search_btn)
-        export_search_btn = QPushButton("📊 Export Results")
-        export_search_btn.clicked.connect(self._export_search)
-        export_search_btn.setMinimumHeight(35)
-        search_layout.addWidget(export_search_btn)
-        search_group.setLayout(search_layout)
-        layout.addWidget(search_group)
+        self.search_input.setPlaceholderText("e.g. python  (partial)")
+        self.search_input.returnPressed.connect(self._search)
+        sl.addWidget(self.search_input, 1)
+        sl.addWidget(QLabel("Title has:"))
+        self.title_input = QLineEdit()
+        self.title_input.setPlaceholderText("words in the title")
+        self.title_input.returnPressed.connect(self._search)
+        sl.addWidget(self.title_input, 1)
+        sl.addWidget(QLabel("Sort:"))
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("Newest", False)
+        self.sort_combo.addItem("Top score", True)
+        sl.addWidget(self.sort_combo)
+        sl.addWidget(QLabel("Scan:"))
+        self.scan_spinner = QSpinBox()
+        self.scan_spinner.setRange(50, 1000)
+        self.scan_spinner.setSingleStep(50)
+        self.scan_spinner.setValue(200)
+        self.scan_spinner.setToolTip("How many recent posts to scan through.")
+        sl.addWidget(self.scan_spinner)
+        self.search_btn = QPushButton("🔍 Search")
+        self.search_btn.clicked.connect(self._search)
+        sl.addWidget(self.search_btn)
+        search.setLayout(sl)
+        layout.addWidget(search)
 
-        stats_group = QGroupBox("📈 Quick Statistics")
-        stats_layout = QHBoxLayout()
+        # ── Statistics ────────────────────────────────────────────────
+        stats = QHBoxLayout()
+        self.count_label = QLabel("Posts: --")
         self.total_label = QLabel("Total Score: --")
-        self.avg_label = QLabel("Average Score: --")
-        self.best_label = QLabel("Best Post: --")
-        for lbl in (self.total_label, self.avg_label, self.best_label):
-            lbl.setStyleSheet("font-size: 11pt; font-weight: bold; padding: 10px;")
-            stats_layout.addWidget(lbl)
-        stats_layout.addStretch()
-        stats_group.setLayout(stats_layout)
-        layout.addWidget(stats_group)
+        self.avg_label = QLabel("Average: --")
+        self.best_label = QLabel("Best: --")
+        for lbl in (self.count_label, self.total_label, self.avg_label, self.best_label):
+            lbl.setStyleSheet("font-weight: bold; padding: 4px 10px;")
+            stats.addWidget(lbl)
+        stats.addStretch()
+        layout.addLayout(stats)
 
+        # ── Table ─────────────────────────────────────────────────────
         self.karma_table = QTableWidget()
-        self.karma_table.setColumnCount(6)
+        self.karma_table.setColumnCount(5)
         self.karma_table.setHorizontalHeaderLabels(
-            ["Subreddit", "Title", "Score", "Comments", "Posted", "URL"]
-        )
-        self.karma_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            ["Subreddit", "Title", "Score", "Comments", "Posted"])
+        hdr = self.karma_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.karma_table.setAlternatingRowColors(True)
+        self.karma_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.karma_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.karma_table.cellDoubleClicked.connect(self._copy_link)
         layout.addWidget(self.karma_table)
 
-    # ------------------------------------------------------------------ karma
+        self._note_default = "Double-click a row to copy its Reddit link to the clipboard."
+        self.note = QLabel(self._note_default)
+        self.note.setStyleSheet("color: #7f8c8d; font-size: 8pt;")
+        layout.addWidget(self.note)
 
-    def _refresh_karma(self):
+    # ------------------------------------------------------------------ actions
+
+    def _refresh(self):
+        self._start(mode='refresh', limit=self.num_posts_spinner.value(),
+                    busy_text="Loading recent posts")
+
+    def _sync_all(self):
+        reply = QMessageBox.question(
+            self, 'Sync All Karma',
+            "Fetch your entire post history from Reddit and update the log?\n"
+            "This may take a while for large accounts.",
+            QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self._start(mode='sync', limit=None, busy_text="Syncing full history")
+
+    def _search(self):
+        name = self.search_input.text().strip().lower().removeprefix('r/')
+        title = self.title_input.text().strip()
+        if not name and not title:
+            QMessageBox.warning(self, 'Input Required',
+                'Enter a subreddit name and/or some words from the title.')
+            return
+        parts = []
+        if name:
+            parts.append(f"r/{name}")
+        if title:
+            parts.append(f'title "{title}"')
+        self._start(mode='search', limit=self.scan_spinner.value(),
+                    subreddit_filter=name, title_filter=title,
+                    sort_by_score=self.sort_combo.currentData(),
+                    busy_text="Searching " + " · ".join(parts))
+
+    def _start(self, mode, limit, subreddit_filter=None, title_filter=None,
+               sort_by_score=False, busy_text=""):
         reddit = self._get_reddit()
         if not reddit:
             return
-        if self._karma_worker and self._karma_worker.isRunning():
-            self._karma_worker.wait()
-
-        self.refresh_btn.setEnabled(False)
-        self.refresh_btn.setText("⏳ Loading...")
-        num = self.num_posts_spinner.value()
-
-        self._karma_worker = KarmaWorker(reddit, num)
-        self._karma_worker.finished.connect(self._display_karma)
-        self._karma_worker.error.connect(self._on_karma_error)
-        self._karma_worker.start()
-
-    def _display_karma(self, posts):
-        self.refresh_btn.setEnabled(True)
-        self.refresh_btn.setText("🔄 Refresh Stats")
-
-        for post in posts:
-            self._post_log.update_karma(post['id'], post['score'], post['comments'])
-
-        self.karma_table.setRowCount(0)
-        if not posts:
-            QMessageBox.information(self, 'No Posts', 'No posts found.')
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, 'Busy', 'Another operation is already running.')
             return
 
-        total = 0
-        best_score = 0
+        self._mode = mode
+        self._busy_text = busy_text
+        self._set_busy(True, f"{busy_text}…")
+
+        self._worker = UserPostsWorker(reddit, limit=limit,
+                                       subreddit_filter=subreddit_filter,
+                                       title_filter=title_filter,
+                                       sort_by_score=sort_by_score)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+        self._worker.start()
+
+    # ------------------------------------------------------------------ worker slots
+
+    def _on_progress(self, scanned):
+        self.progress_label.setText(f"{self._busy_text}… scanned {scanned}")
+
+    def _on_finished(self, posts):
+        self._set_busy(False)
+
+        # Refresh and full-sync also write results back to the post log
+        if self._mode in ('refresh', 'sync') and posts:
+            self._post_log.upsert_posts(posts)
+
+        self._display(posts)
+
+        if self._mode == 'sync':
+            QMessageBox.information(self, 'Sync Complete',
+                f"Synced {len(posts)} post(s) into the log.")
+        elif self._mode == 'search' and not posts:
+            QMessageBox.information(self, 'No Posts Found',
+                "No matching posts in the scanned range.\n"
+                "Try increasing 'Scan', or check the subreddit name.")
+
+    def _on_error(self, message):
+        self._set_busy(False)
+        QMessageBox.critical(self, 'Error', f'Operation failed:\n{message}')
+
+    def _set_busy(self, busy, message=""):
+        for btn in (self.refresh_btn, self.sync_btn, self.search_btn):
+            btn.setEnabled(not busy)
+        if busy:
+            self.progress.setRange(0, 0)   # indeterminate
+            self.progress.show()
+            self.progress_label.setText(message)
+        else:
+            self.progress.hide()
+            self.progress_label.setText("")
+
+    # ------------------------------------------------------------------ table + stats
+
+    def _display(self, posts):
+        self.karma_table.setRowCount(0)
+        if not posts:
+            self._set_stats(0, 0, 0, '')
+            return
+
+        total = best_score = 0
         best_title = ''
         for post in posts:
             row = self.karma_table.rowCount()
             self.karma_table.insertRow(row)
-            self.karma_table.setItem(row, 0, QTableWidgetItem(post['subreddit']))
-            self.karma_table.setItem(row, 1, QTableWidgetItem(post['title']))
-            score_item = QTableWidgetItem(str(post['score']))
-            score_item.setTextAlignment(Qt.AlignCenter)
-            self.karma_table.setItem(row, 2, score_item)
-            comments_item = QTableWidgetItem(str(post['comments']))
-            comments_item.setTextAlignment(Qt.AlignCenter)
-            self.karma_table.setItem(row, 3, comments_item)
-            self.karma_table.setItem(row, 4, QTableWidgetItem(post['created'].strftime("%Y-%m-%d %H:%M")))
-            self.karma_table.setItem(row, 5, QTableWidgetItem(post['url']))
+
+            self.karma_table.setItem(row, 0, QTableWidgetItem(f"r/{post['subreddit']}"))
+            title_item = QTableWidgetItem(post['title'])
+            title_item.setData(Qt.UserRole, post.get('permalink', ''))
+            self.karma_table.setItem(row, 1, title_item)
+            self._num_cell(row, 2, post['score'])
+            self._num_cell(row, 3, post['comments'])
+            posted = post['created'].strftime("%Y-%m-%d %H:%M") if post.get('created') else ''
+            self.karma_table.setItem(row, 4, QTableWidgetItem(posted))
+
             total += post['score']
-            if post['score'] > best_score:
+            if post['score'] >= best_score:
                 best_score = post['score']
-                best_title = post['title'][:40] + "..."
+                best_title = post['title']
 
         avg = total / len(posts)
+        self._set_stats(len(posts), total, avg, f"{best_title[:40]} ({best_score:,})")
+        logger.info("Displayed %d posts in karma table", len(posts))
+
+    def _num_cell(self, row, col, value):
+        item = QTableWidgetItem(f"{value:,}")
+        item.setTextAlignment(Qt.AlignCenter)
+        self.karma_table.setItem(row, col, item)
+
+    def _set_stats(self, count, total, avg, best):
+        self.count_label.setText(f"Posts: {count:,}")
         self.total_label.setText(f"Total Score: {total:,}")
-        self.avg_label.setText(f"Average Score: {avg:.1f}")
-        self.best_label.setText(f"Best Post: {best_title} ({best_score:,})")
-        logger.info(f"Displayed {len(posts)} posts in karma table")
+        self.avg_label.setText(f"Average: {avg:.1f}")
+        self.best_label.setText(f"Best: {best}" if best else "Best: --")
 
-    def _on_karma_error(self, error_msg):
-        self.refresh_btn.setEnabled(True)
-        self.refresh_btn.setText("🔄 Refresh Stats")
-        QMessageBox.critical(self, 'Error', f'Failed to fetch karma stats:\n{error_msg}')
-
-    # ------------------------------------------------------------------ search
-
-    def _search_by_subreddit(self):
-        reddit = self._get_reddit()
-        if not reddit:
+    def _copy_link(self, row, _col):
+        item = self.karma_table.item(row, 1)
+        url = item.data(Qt.UserRole) if item else ''
+        if not url:
             return
-        name = self.search_input.text().strip().lower().removeprefix('r/')
-        if not name:
-            QMessageBox.warning(self, 'Input Required', 'Please enter a subreddit name')
-            return
-        limit = self.search_limit.value()
-        try:
-            user = reddit.user.me()
-            posts = []
-            for submission in user.submissions.new(limit=200):
-                if submission.subreddit.display_name.lower() == name:
-                    posts.append({
-                        'subreddit': submission.subreddit.display_name,
-                        'title': submission.title,
-                        'score': submission.score,
-                        'comments': submission.num_comments,
-                        'created': datetime.fromtimestamp(submission.created_utc),
-                        'url': f"https://reddit.com{submission.permalink}",
-                        'id': submission.id,
-                    })
-                    if len(posts) >= limit:
-                        break
-            if not posts:
-                QMessageBox.information(self, 'No Posts Found',
-                    f'No posts found in r/{name}\n\n'
-                    '• Check the subreddit name\n'
-                    '• You must have posted there\n'
-                    '• Searches last 200 posts')
-                return
-            self._display_karma(posts)
-            QMessageBox.information(self, 'Search Complete',
-                f'Found {len(posts)} posts in r/{name}!')
-        except Exception as e:
-            QMessageBox.critical(self, 'Search Failed', f'Failed to search posts:\n{str(e)}')
+        QApplication.clipboard().setText(url)
+        self.note.setText(f"📋 Link copied to clipboard:  {url}")
+        self.note.setStyleSheet("color: #27ae60; font-size: 8pt; font-weight: bold;")
+        QTimer.singleShot(2000, self._reset_note)
 
-    # ------------------------------------------------------------------ bulk karma update
-
-    def _bulk_update_karma(self):
-        reddit = self._get_reddit()
-        if not reddit:
-            return
-        if self._bulk_worker and self._bulk_worker.isRunning():
-            QMessageBox.information(self, 'Already Running', 'Karma update is already in progress.')
-            return
-
-        self.update_log_btn.setEnabled(False)
-        self.update_log_btn.setText("⏳ Updating...")
-
-        self._bulk_worker = BulkKarmaUpdateWorker(reddit, self._post_log.filepath)
-        self._bulk_worker.progress.connect(self._on_bulk_progress)
-        self._bulk_worker.finished.connect(self._on_bulk_finished)
-        self._bulk_worker.error.connect(self._on_bulk_error)
-        self._bulk_worker.start()
-
-    def _on_bulk_progress(self, updated, failed):
-        logger.debug(f"Bulk karma update: {updated} updated, {failed} failed")
-
-    def _on_bulk_finished(self, updated, failed):
-        self.update_log_btn.setEnabled(True)
-        self.update_log_btn.setText("🔄 Update All Karma in Log")
-        logger.info(f"Bulk karma update done: {updated} updated, {failed} failed")
-        QMessageBox.information(self, 'Karma Update Complete',
-            f'Updated karma for all logged posts!\n\n'
-            f'✅ Updated: {updated}\n❌ Failed: {failed}\n\n'
-            f'Open {self._post_log.filepath} to see results.')
-
-    def _on_bulk_error(self, error_msg):
-        self.update_log_btn.setEnabled(True)
-        self.update_log_btn.setText("🔄 Update All Karma in Log")
-        QMessageBox.critical(self, 'Error', f'Failed to update karma:\n{error_msg}')
+    def _reset_note(self):
+        self.note.setText(self._note_default)
+        self.note.setStyleSheet("color: #7f8c8d; font-size: 8pt;")
 
     # ------------------------------------------------------------------ misc
 
     def _open_log(self):
         if not self._post_log.open_file():
-            QMessageBox.warning(self, 'File Not Found', 'Post log file does not exist yet.')
+            QMessageBox.warning(self, 'File Not Found',
+                'The post log is empty. Post something or run "Sync All Karma" first.')
 
-    def _export_karma(self):
+    def _export(self):
         if self.karma_table.rowCount() == 0:
-            QMessageBox.warning(self, 'No Data', 'No karma data to export. Please refresh stats first.')
+            QMessageBox.warning(self, 'No Data', 'Nothing to export — refresh or search first.')
             return
-        export_table_to_excel(self, self.karma_table, "Karma Stats", "Save Karma Stats",
-                              "karma_stats", KARMA_COL_WIDTHS)
-
-    def _export_search(self):
-        if self.karma_table.rowCount() == 0:
-            QMessageBox.warning(self, 'No Data', 'No results to export. Search for posts first!')
-            return
-        export_table_to_excel(self, self.karma_table, "Search Results", "Export Search Results",
-                              "search_results", KARMA_COL_WIDTHS)
+        export_table_to_csv(self, self.karma_table, "Export Karma", "karma_stats")
 
     def stop_workers_on_close(self):
-        for worker in (self._karma_worker, self._bulk_worker):
-            if worker and worker.isRunning():
-                worker.wait(3000)
-                if worker.isRunning():
-                    worker.terminate()
+        if self._worker and self._worker.isRunning():
+            self._worker.stop()
+            self._worker.wait(3000)
+            if self._worker.isRunning():
+                self._worker.terminate()
