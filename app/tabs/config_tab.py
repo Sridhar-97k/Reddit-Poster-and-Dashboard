@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 
@@ -102,6 +103,11 @@ class ConfigTab(QWidget):
         try:
             with open(self.config_file, 'w') as f:
                 json.dump(creds, f, indent=4)
+            # Restrict to owner-only (no-op on filesystems without POSIX perms)
+            try:
+                os.chmod(self.config_file, 0o600)
+            except OSError:
+                pass
             self.credentials_saved.emit()
             QMessageBox.information(
                 self, 'Success',
