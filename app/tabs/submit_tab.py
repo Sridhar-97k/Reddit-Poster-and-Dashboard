@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                              QLabel, QPushButton, QTextEdit, QProgressBar,
@@ -13,11 +14,10 @@ logger = logging.getLogger(__name__)
 class SubmitTab(QWidget):
     submission_finished = pyqtSignal(dict)
 
-    def __init__(self, get_reddit, post_log, favorites_manager, get_posts):
+    def __init__(self, get_reddit, post_log, get_posts):
         super().__init__()
         self._get_reddit = get_reddit
         self._post_log = post_log
-        self._favorites = favorites_manager
         self._get_posts = get_posts   # callable → list of post dicts from ImportTab
         self._worker = None
         self._build_ui()
@@ -43,7 +43,7 @@ class SubmitTab(QWidget):
         self.delay_spinner = QSpinBox()
         self.delay_spinner.setMinimum(10)
         self.delay_spinner.setMaximum(3600)
-        self.delay_spinner.setValue(30)
+        self.delay_spinner.setValue(10)
         self.delay_spinner.setSuffix(" seconds")
         self.delay_spinner.setMinimumWidth(130)
         delay_layout.addWidget(self.delay_spinner)
@@ -104,7 +104,16 @@ class SubmitTab(QWidget):
         self.progress_bar.setValue(0)
         self.log_view.clear()
 
-        self._worker = RedditWorker(reddit, posts, delay_secs=self.delay_spinner.value())
+        delay = self.delay_spinner.value()
+        self._append(f"━━━━━━━━━━ Batch started {datetime.now():%Y-%m-%d %H:%M:%S} ━━━━━━━━━━")
+        self._append(f"Posts to submit: {len(posts)}   ·   Delay between posts: {delay}s")
+        subs = ', '.join(f"r/{p['subreddit']}" for p in posts[:8])
+        if len(posts) > 8:
+            subs += f", … (+{len(posts) - 8} more)"
+        self._append(f"Targets: {subs}")
+        self._append("")
+
+        self._worker = RedditWorker(reddit, posts, delay_secs=delay)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
@@ -115,25 +124,34 @@ class SubmitTab(QWidget):
         if self._worker and self._worker.isRunning():
             self._worker.stop()
             self._worker.wait()
-            self.log_view.append("\n⏹️ Submission stopped by user\n")
+            self._append(f"\n[{datetime.now():%H:%M:%S}] ⏹️ Submission stopped by user\n")
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
             logger.info("Batch submission stopped by user")
 
-    def _on_progress(self, count, message):
-        self.progress_bar.setValue(count)
-        self.progress_label.setText(f"Processing: {count}/{self.progress_bar.maximum()}")
-        self.log_view.append(message)
+    def _append(self, text):
+        """Append a line to the log view and keep it scrolled to the bottom."""
+        self.log_view.append(text)
         cursor = self.log_view.textCursor()
         cursor.movePosition(cursor.End)
         self.log_view.setTextCursor(cursor)
+
+    def _on_progress(self, count, message):
+        self.progress_bar.setValue(count)
+        total = self.progress_bar.maximum()
+        self.progress_label.setText(f"Processing: {count}/{total}")
+        self._append(f"[{datetime.now():%H:%M:%S}] ({count}/{total}) {message}")
 
     def _on_finished(self, results):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
-        # Log successful posts and update favorites usage
-        for item in results['successful']:
+        successful = results['successful']
+        failed = results['failed']
+        total = results['total']
+
+        # Log successful posts
+        for item in successful:
             self._post_log.log_post({
                 'id': item.get('id', ''),
                 'subreddit': item.get('subreddit', ''),
@@ -144,10 +162,32 @@ class SubmitTab(QWidget):
                 'comments': 0,
             })
 
-        posted_subs = {item['subreddit'].lower() for item in results['successful']}
-        self._favorites.increment_usage(posted_subs)
+        # Elaborate summary in the log
+        rate = (len(successful) / total * 100) if total else 0
+        self._append("")
+        self._append(f"━━━━━━━━━━ Batch finished {datetime.now():%Y-%m-%d %H:%M:%S} ━━━━━━━━━━")
+        self._append(f"✅ Successful: {len(successful)}    ❌ Failed: {len(failed)}    "
+                     f"📊 Total: {total}    📈 Success rate: {rate:.1f}%")
 
-        logger.info(f"Submission done: {len(results['successful'])} ok, {len(results['failed'])} failed")
+        if successful:
+            self._append("\nSuccessful posts:")
+            for item in successful:
+                self._append(f"  ✅ r/{item['subreddit']} — {item['title'][:70]}")
+                self._append(f"       {item['permalink']}")
+
+        if failed:
+            self._append("\nFailed posts:")
+            for item in failed:
+                post = item.get('post', {})
+                sub = post.get('subreddit', 'N/A')
+                title = post.get('title', 'N/A')
+                self._append(f"  ❌ r/{sub} — {str(title)[:70]}")
+                self._append(f"       reason: {str(item['reason'])[:150]}")
+
+        self.progress_label.setText(
+            f"Done — {len(successful)} succeeded, {len(failed)} failed out of {total}")
+
+        logger.info(f"Submission done: {len(successful)} ok, {len(failed)} failed")
         self.submission_finished.emit(results)
 
     def _on_error(self, error_msg):
