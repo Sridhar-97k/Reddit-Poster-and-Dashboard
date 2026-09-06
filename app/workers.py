@@ -4,6 +4,7 @@ from datetime import datetime
 
 from PyQt5.QtCore import QThread, pyqtSignal
 from praw.exceptions import RedditAPIException
+from prawcore.exceptions import Forbidden
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,51 @@ def link_flair_label(template):
         return text
     segments = template.get('richtext') or []
     return ''.join(seg.get('t', '') for seg in segments).strip()
+
+
+def _from_mod_template(t):
+    """Normalize one r/<sub>/api/link_flair_v2 template (moderator view)."""
+    return {
+        'id': t.get('id'),
+        'text': t.get('text') or '',
+        'richtext': t.get('richtext') or [],
+        'mod_only': bool(t.get('mod_only')),
+    }
+
+
+def _from_selectable_choice(c):
+    """Normalize one /api/flairselector choice (regular-user view).
+
+    That endpoint only ever returns templates the account may actually apply,
+    so mod_only is False by construction."""
+    return {
+        'id': c.get('flair_template_id'),
+        'text': c.get('flair_text') or '',
+        'richtext': c.get('flair_richtext') or [],
+        'mod_only': False,
+    }
+
+
+def fetch_link_flairs(subreddit):
+    """Return a subreddit's link-flair templates as normalized dicts with the
+    keys 'id', 'text', 'richtext' and 'mod_only'.
+
+    Prefers `flair.link_templates` (r/<sub>/api/link_flair_v2), which lists every
+    template including mod-only ones. That endpoint is mod-privileged, though —
+    plenty of subreddits answer a non-moderator with 403 — so on Forbidden fall
+    back to `user_selectable()` (/api/flairselector), the same call the Reddit
+    submit page makes. The fallback sees only user-selectable templates, which is
+    exactly the set we can attach at submit time anyway.
+
+    Both shapes are normalized to one dict so callers need not know which
+    endpoint answered."""
+    try:
+        return [_from_mod_template(t) for t in subreddit.flair.link_templates]
+    except Forbidden:
+        logger.info("r/%s: link_flair_v2 forbidden (not a moderator) — "
+                    "falling back to the user-selectable flair list", subreddit)
+        return [_from_selectable_choice(c)
+                for c in subreddit.flair.link_templates.user_selectable()]
 
 
 class RedditWorker(QThread):
@@ -61,7 +107,7 @@ class RedditWorker(QThread):
         enforce flair before a post is accepted. Returns the template id, or None
         if nothing matched (in which case the available flairs are logged)."""
         try:
-            templates = list(sub.flair.link_templates)
+            templates = fetch_link_flairs(sub)
         except Exception as e:
             self.progress.emit(idx + 1, f"⚠️ Could not load flairs for r/{subreddit}: {str(e)[:60]}")
             logger.warning("Could not load link flair templates for r/%s: %s", subreddit, e)
@@ -275,9 +321,9 @@ class FlairFetchWorker(QThread):
             if not self.is_running:
                 break
             try:
-                templates = list(self.reddit.subreddit(sub).flair.link_templates)
+                templates = fetch_link_flairs(self.reddit.subreddit(sub))
                 flairs = [
-                    {'text': link_flair_label(t), 'id': t.get('id'), 'mod_only': bool(t.get('mod_only'))}
+                    {'text': link_flair_label(t), 'id': t.get('id'), 'mod_only': t['mod_only']}
                     for t in templates
                 ]
                 result[sub] = flairs
