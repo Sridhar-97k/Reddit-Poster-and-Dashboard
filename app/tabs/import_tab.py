@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                              QHeaderView, QMessageBox, QFileDialog,
                              QStyledItemDelegate, QComboBox)
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QBrush
 
 from ..widgets.spreadsheet import SpreadsheetWidget
 from ..workers import FlairFetchWorker
@@ -15,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 _COLS = ['subreddit', 'title', 'url', 'flair']
 _INITIAL_ROWS = 20
+_SUB_COL, _FLAIR_COL = 0, 3
+_FLAIR_AVAILABLE_BG = QColor('#d5f5e3')   # light green: flairs cached for this row
 
 
 class _ComboBoxDelegate(QStyledItemDelegate):
@@ -68,7 +71,9 @@ class ImportTab(QWidget):
         info = QLabel(
             "Columns: <b>subreddit</b> (no r/) · <b>title</b> · <b>url</b> · <b>flair</b> (optional)  "
             "— edit directly here.  The Subreddit and Flair cells offer dropdowns "
-            "(your favourites · fetched flairs).  Ctrl+C / Ctrl+V, Delete, and fill-handle drag all work."
+            "(your favourites · fetched flairs).  After <b>Get Flairs</b>, a "
+            "<span style='background:#d5f5e3;'>&nbsp;green Flair cell&nbsp;</span> means that "
+            "subreddit has flairs to pick.  Ctrl+C / Ctrl+V, Delete, and fill-handle drag all work."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -129,6 +134,10 @@ class ImportTab(QWidget):
             self._flairs_for_index, parent=self.spreadsheet)
         self.spreadsheet.setItemDelegateForColumn(3, self._flair_delegate)
 
+        # Highlight the Flair cell of any row whose subreddit has cached flairs,
+        # updating live as the Subreddit column changes.
+        self.spreadsheet.cellChanged.connect(self._on_cell_changed)
+
         layout.addWidget(self.spreadsheet)
 
     # ------------------------------------------------------------------ dropdown sources
@@ -141,6 +150,40 @@ class ImportTab(QWidget):
         """Cached flairs for the subreddit in this row — for the Flair dropdown."""
         sub = (index.model().index(index.row(), 0).data() or '').strip()
         return self._flair_store.get_texts(sub) if sub else []
+
+    # ------------------------------------------------------------------ flair indicators
+
+    def _on_cell_changed(self, row, col):
+        # When a Subreddit cell changes, refresh that row's flair indicator.
+        if col == _SUB_COL:
+            self._update_row_indicator(row)
+
+    def refresh_flair_indicators(self):
+        """Re-evaluate every row's flair indicator (call after Get Flairs)."""
+        for row in range(self.spreadsheet.rowCount()):
+            self._update_row_indicator(row)
+
+    def _update_row_indicator(self, row):
+        """Tint the row's Flair cell green (+ tooltip) if its subreddit has
+        cached flairs; clear the tint otherwise. Non-destructive to cell text."""
+        sub = self._cell(row, _SUB_COL)
+        flairs = self._flair_store.get_texts(sub) if sub else []
+
+        sp = self.spreadsheet
+        item = sp.item(row, _FLAIR_COL)
+        blocked = sp.blockSignals(True)   # setItem/setData would re-emit cellChanged
+        try:
+            if item is None:
+                item = QTableWidgetItem()
+                sp.setItem(row, _FLAIR_COL, item)
+            if flairs:
+                item.setBackground(_FLAIR_AVAILABLE_BG)
+                item.setToolTip(f"{len(flairs)} flair(s) available — click to choose")
+            else:
+                item.setBackground(QBrush())   # clear tint
+                item.setToolTip("")
+        finally:
+            sp.blockSignals(blocked)
 
     # ------------------------------------------------------------------ public
 
@@ -191,6 +234,8 @@ class ImportTab(QWidget):
 
         for sub, flairs in result.items():
             self._flair_store.update(sub, flairs)
+
+        self.refresh_flair_indicators()
 
         total_flairs = sum(len(v) for v in result.values())
         failed = [s for s in self._flair_requested if s not in result]
